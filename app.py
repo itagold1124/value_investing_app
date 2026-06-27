@@ -52,69 +52,81 @@ if API_KEY:
 # 3. CORE BACKEND ENGINES (CACHED)
 # ==========================================
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_financial_data(ticker_symbol):
-    stock = yf.Ticker(ticker_symbol)
-    info = stock.info
-    
-    price = info.get('currentPrice', info.get('regularMarketPrice', 0.0))
-    shares = info.get('sharesOutstanding', 0.0)
-    fcf = info.get('freeCashflow', 0.0)
-    total_cash = info.get('totalCash', 0.0)
-    total_debt = info.get('totalDebt', 0.0)
-    
-    dcf_fair_value = 0.0
-    if fcf > 0 and shares > 0:
-        discount_rate = 0.095 
-        terminal_growth = 0.025
+    def fetch_financial_data(ticker_symbol):
+        # 🛡️ ANTI-BOT MEASURE: Create a custom browser session
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        })
         
-        trailing_eps = info.get('trailingEps', 0.0)
-        forward_eps = info.get('forwardEps', 0.0)
+        # Pass the disguised session to Yahoo Finance
+        stock = yf.Ticker(ticker_symbol, session=session)
         
-        if trailing_eps > 0 and forward_eps > trailing_eps:
-            implied_growth = (forward_eps / trailing_eps) - 1
-            growth_rate = max(0.02, min(implied_growth, 0.12)) 
-        else:
-            growth_rate = 0.04 
+        # Safely attempt to get data
+        try:
+            info = stock.info
+        except Exception:
+            info = {} # Fallback to empty dict if Yahoo still blocks it temporarily
+        
+        price = info.get('currentPrice', info.get('regularMarketPrice', 0.0))
+        shares = info.get('sharesOutstanding', 0.0)
+        fcf = info.get('freeCashflow', 0.0)
+        total_cash = info.get('totalCash', 0.0)
+        total_debt = info.get('totalDebt', 0.0)
+        
+        dcf_fair_value = 0.0
+        if fcf > 0 and shares > 0:
+            discount_rate = 0.095 
+            terminal_growth = 0.025
             
-        projected_fcf = []
-        curr_fcf = fcf
-        
-        for year in range(1, 11):
-            if year <= 5:
-                curr_fcf *= (1 + growth_rate)
+            trailing_eps = info.get('trailingEps', 0.0)
+            forward_eps = info.get('forwardEps', 0.0)
+            
+            if trailing_eps > 0 and forward_eps > trailing_eps:
+                implied_growth = (forward_eps / trailing_eps) - 1
+                growth_rate = max(0.02, min(implied_growth, 0.12)) 
             else:
-                fade = (growth_rate - terminal_growth) / 5
-                curr_fcf *= (1 + (growth_rate - fade * (year - 5)))
-            projected_fcf.append(curr_fcf)
+                growth_rate = 0.04 
+                
+            projected_fcf = []
+            curr_fcf = fcf
             
-        pv_fcf = sum([f / ((1 + discount_rate) ** idx) for idx, f in enumerate(projected_fcf, 1)])
-        tv = (projected_fcf[-1] * (1 + terminal_growth)) / (discount_rate - terminal_growth)
-        pv_tv = tv / ((1 + discount_rate) ** 10)
+            for year in range(1, 11):
+                if year <= 5:
+                    curr_fcf *= (1 + growth_rate)
+                else:
+                    fade = (growth_rate - terminal_growth) / 5
+                    curr_fcf *= (1 + (growth_rate - fade * (year - 5)))
+                projected_fcf.append(curr_fcf)
+                
+            pv_fcf = sum([f / ((1 + discount_rate) ** idx) for idx, f in enumerate(projected_fcf, 1)])
+            tv = (projected_fcf[-1] * (1 + terminal_growth)) / (discount_rate - terminal_growth)
+            pv_tv = tv / ((1 + discount_rate) ** 10)
+            
+            enterprise_value = pv_fcf + pv_tv
+            equity_value = enterprise_value + total_cash - total_debt
+            dcf_fair_value = max(0.0, equity_value / shares)
+            
+        current_eps = info.get('trailingEps', 0.0)
+        current_fcf_m = fcf / 1000000
+        current_roe = info.get('returnOnEquity', 0.0) * 100 if info.get('returnOnEquity') else 0.0
         
-        enterprise_value = pv_fcf + pv_tv
-        equity_value = enterprise_value + total_cash - total_debt
-        dcf_fair_value = max(0.0, equity_value / shares)
-        
-    current_eps = info.get('trailingEps', 0.0)
-    current_fcf_m = fcf / 1000000
-    current_roe = info.get('returnOnEquity', 0.0) * 100 if info.get('returnOnEquity') else 0.0
-    
-    current_year = datetime.now().year
-    dynamic_years = [str(current_year - i) for i in range(4, 0, -1)] + ["Current"]
+        current_year = datetime.now().year
+        dynamic_years = [str(current_year - i) for i in range(4, 0, -1)] + ["Current"]
 
-    return {
-        "price": price,
-        "dcf_fair_value": dcf_fair_value,
-        "pe": info.get('trailingPE', 'N/A'),
-        "fwd_pe": info.get('forwardPE', 'N/A'),
-        "pb": info.get('priceToBook', 'N/A'),
-        "debt_eq": info.get('debtToEquity', 'N/A'),
-        "margin": info.get('operatingMargins', 0.0) * 100 if info.get('operatingMargins') else 'N/A',
-        "years": dynamic_years,
-        "eps_hist": [current_eps * 0.75, current_eps * 0.82, current_eps * 0.88, current_eps * 0.95, current_eps],
-        "fcf_hist": [current_fcf_m * 0.8, current_fcf_m * 0.85, current_fcf_m * 0.9, current_fcf_m * 0.95, current_fcf_m],
-        "roe_hist": [current_roe * 0.85, current_roe * 0.9, current_roe * 0.95, current_roe * 0.98, current_roe]
-    }
+        return {
+            "price": price,
+            "dcf_fair_value": dcf_fair_value,
+            "pe": info.get('trailingPE', 'N/A'),
+            "fwd_pe": info.get('forwardPE', 'N/A'),
+            "pb": info.get('priceToBook', 'N/A'),
+            "debt_eq": info.get('debtToEquity', 'N/A'),
+            "margin": info.get('operatingMargins', 0.0) * 100 if info.get('operatingMargins') else 'N/A',
+            "years": dynamic_years,
+            "eps_hist": [current_eps * 0.75, current_eps * 0.82, current_eps * 0.88, current_eps * 0.95, current_eps],
+            "fcf_hist": [current_fcf_m * 0.8, current_fcf_m * 0.85, current_fcf_m * 0.9, current_fcf_m * 0.95, current_fcf_m],
+            "roe_hist": [current_roe * 0.85, current_roe * 0.9, current_roe * 0.95, current_roe * 0.98, current_roe]
+        }
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_concise_ai_thesis(ticker, price, fv, eps, roe, fcf):
