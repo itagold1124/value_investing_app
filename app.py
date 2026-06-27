@@ -51,30 +51,25 @@ if API_KEY:
 # ==========================================
 # 3. CORE BACKEND ENGINES (CACHED)
 # ==========================================
-@st.cache_data(ttl=3600, show_spinner=False) # Refreshes hourly for market relevance
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_financial_data(ticker_symbol):
     stock = yf.Ticker(ticker_symbol)
     info = stock.info
     
-    # 1. Safe Extraction of Core Metrics
     price = info.get('currentPrice', info.get('regularMarketPrice', 0.0))
     shares = info.get('sharesOutstanding', 0.0)
     fcf = info.get('freeCashflow', 0.0)
     total_cash = info.get('totalCash', 0.0)
     total_debt = info.get('totalDebt', 0.0)
     
-    # 2. Enhanced Enterprise-to-Equity DCF Model
     dcf_fair_value = 0.0
     if fcf > 0 and shares > 0:
-        # Dynamic Risk/WACC Proxy (Base Rate + Equity Risk Premium)
-        # Using a safer 9.5% for standard equities in current rate environment
         discount_rate = 0.095 
         terminal_growth = 0.025
         
         trailing_eps = info.get('trailingEps', 0.0)
         forward_eps = info.get('forwardEps', 0.0)
         
-        # Smart Growth Projection (Capped at 12% to prevent tech-bubble valuations)
         if trailing_eps > 0 and forward_eps > trailing_eps:
             implied_growth = (forward_eps / trailing_eps) - 1
             growth_rate = max(0.02, min(implied_growth, 0.12)) 
@@ -84,7 +79,6 @@ def fetch_financial_data(ticker_symbol):
         projected_fcf = []
         curr_fcf = fcf
         
-        # 10-Year Projection with 5-Year Fade
         for year in range(1, 11):
             if year <= 5:
                 curr_fcf *= (1 + growth_rate)
@@ -101,7 +95,6 @@ def fetch_financial_data(ticker_symbol):
         equity_value = enterprise_value + total_cash - total_debt
         dcf_fair_value = max(0.0, equity_value / shares)
         
-    # Historical Mock Data (YF requires deep scraping for exact historicals, using normalized proxies for charting)
     current_eps = info.get('trailingEps', 0.0)
     current_fcf_m = fcf / 1000000
     current_roe = info.get('returnOnEquity', 0.0) * 100 if info.get('returnOnEquity') else 0.0
@@ -149,46 +142,78 @@ def fetch_concise_ai_thesis(ticker, price, fv, eps, roe, fcf):
         return f"AI Analysis temporarily unavailable: {str(e)}"
 
 # ==========================================
-# 4. SIDEBAR & WATCHLIST MANAGER
+# 4. WATCHLIST MANAGER (RESTORED POPUP)
 # ==========================================
-with st.sidebar:
-    st.header("🗂️ Workspace")
-    
-    search_query = st.text_input("🔍 Quick Add Ticker (e.g. AAPL):")
-    if st.button("Add to Watchlist", use_container_width=True) and search_query:
-        search_query = search_query.upper().strip()
-        if search_query not in st.session_state.my_watchlist:
-            # Simple verify
+def add_stock_callback(new_ticker, new_name):
+    if new_ticker not in st.session_state.my_watchlist:
+        st.session_state.my_watchlist.append(new_ticker)
+        st.session_state.company_names[new_ticker] = new_name
+
+def remove_stock_callback(ticker_to_remove):
+    if ticker_to_remove in st.session_state.my_watchlist:
+        st.session_state.my_watchlist.remove(ticker_to_remove)
+    if ticker_to_remove in st.session_state.company_names:
+        del st.session_state.company_names[ticker_to_remove]
+    if st.session_state.active_ticker == ticker_to_remove:
+        st.session_state.active_ticker = None
+
+@st.dialog("📋 My Stock List Manager", width="large")
+def open_watchlist_manager():
+    st.write("Search Yahoo Finance to verify active tickers, or manage saved items below.")
+    st.subheader("🔍 Find & Verify via Yahoo Finance")
+    search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Microsoft):", key="modal_search_input")
+
+    if search_query:
+        with st.spinner("Querying Yahoo Finance directory..."):
             try:
-                if yf.Ticker(search_query).info.get('regularMarketPrice'):
-                    st.session_state.my_watchlist.append(search_query)
-                    st.session_state.company_names[search_query] = search_query
-                    st.success(f"Added {search_query}")
-                else:
-                    st.error("Invalid Ticker")
-            except:
-                st.error("Error verifying ticker.")
+                url = f"https://query2.finance.yahoo.com/v1/finance/search?q={search_query}&quotesCount=6&newsCount=0"
+                headers = {"User-Agent": "Mozilla/5.0"}
+                response = requests.get(url, headers=headers)
+                if response.status_code == 200:
+                    search_results = response.json().get("quotes", [])
+                    valid_matches = [{"display_name": f"{i.get('shortname') or i.get('longname')} ({i.get('symbol')} - {i.get('exchange')})", "ticker": i.get("symbol"), "company_name": i.get("shortname") or i.get("longname")} for i in search_results if i.get("symbol") and (i.get("shortname") or i.get("longname")) and i.get("exchange")]
+                    
+                    if valid_matches:
+                        options_map = {item["display_name"]: item for item in valid_matches}
+                        dropdown_selection = st.selectbox("👇 Select company:", options=["-- Select Company --"] + list(options_map.keys()), key="modal_dropdown_selection")
+                        if dropdown_selection != "-- Select Company --":
+                            chosen_item = options_map[dropdown_selection]
+                            st.button(f"➕ Add {chosen_item['ticker']} to List", key=f"add_{chosen_item['ticker']}", on_click=add_stock_callback, args=(chosen_item['ticker'], chosen_item['company_name']), use_container_width=True)
+                    else:
+                        st.warning("No active listings found.")
+            except Exception as e:
+                st.error(f"Search error: {str(e)}")
 
     st.markdown("---")
-    st.subheader("Your Watchlist")
-    for t in sorted(st.session_state.my_watchlist):
-        cols = st.columns([3, 1])
-        if cols[0].button(f"📊 {t}", key=f"load_{t}", use_container_width=True):
-            st.session_state.active_ticker = t
-        if cols[1].button("🗑️", key=f"del_{t}", use_container_width=True):
-            st.session_state.my_watchlist.remove(t)
-            if st.session_state.active_ticker == t:
-                st.session_state.active_ticker = None
-            st.rerun()
+    st.subheader("Your Saved Watchlist")
+
+    if not st.session_state.my_watchlist:
+        st.info("Your watchlist is empty. Search for a stock above to get started!")
+    else:
+        for ticker in sorted(list(st.session_state.my_watchlist)):
+            c1, c2, c3 = st.columns([1.5, 4, 1])
+            if c1.button(f"📊 Analyze {ticker}", key=f"select_{ticker}", use_container_width=True):
+                st.session_state.active_ticker = ticker
+                st.write("<script>window.parent.document.querySelector('.stDialog').remove();</script>", unsafe_allow_html=True)
+                st.rerun()
+            c2.write(f"**{ticker}** — {st.session_state.company_names.get(ticker, 'Unknown Name').strip()}")
+            c3.button("🗑️", key=f"del_{ticker}", on_click=remove_stock_callback, args=(ticker,), use_container_width=True)
+
+with st.sidebar:
+    st.header("🗂️ Workspace")
+    if st.button("⚙️ Manage My Stock List", use_container_width=True):
+        open_watchlist_manager()
+    st.markdown("---")
 
 # ==========================================
 # 5. MAIN DASHBOARD RENDER
 # ==========================================
 if not st.session_state.active_ticker:
-    st.info("👋 **Welcome to the Terminal.** Select or add a stock in the sidebar to begin analysis.")
+    st.info("👋 **Welcome to the Terminal.** Click **⚙️ Manage My Stock List** in the sidebar to begin.")
 else:
     ticker = st.session_state.active_ticker
-    st.header(f"🏢 {ticker} Investment Dashboard")
+    comp_name = st.session_state.company_names.get(ticker, ticker)
+    st.header(f"🏢 {comp_name} ({ticker})")
     
     if st.button("🚀 Execute Comprehensive Analysis", type="primary"):
         with st.spinner("Compiling financial models and AI thesis..."):
@@ -234,27 +259,22 @@ else:
                 m_col3.metric("Operating Margin", f"{op_margin:.1f}%" if isinstance(op_margin, float) else op_margin)
 
             with tab2:
-                # Upgraded Matplotlib Styling
                 fig, axs = plt.subplots(1, 3, figsize=(18, 5))
                 plt.subplots_adjust(wspace=0.3)
                 
-                # Setup unified style
                 for ax in axs:
                     ax.spines['top'].set_visible(False)
                     ax.spines['right'].set_visible(False)
                     ax.grid(axis='y', linestyle='--', alpha=0.3)
                 
-                # EPS Chart
                 axs[0].plot(data['years'], data['eps_hist'], marker='o', color='#2E86AB', linewidth=2.5)
                 axs[0].fill_between(data['years'], data['eps_hist'], alpha=0.1, color='#2E86AB')
                 axs[0].set_title("Earnings Per Share (EPS)", pad=15, fontweight='bold')
                 
-                # FCF Chart
                 axs[1].plot(data['years'], data['fcf_hist'], marker='s', color='#3CB371', linewidth=2.5)
                 axs[1].fill_between(data['years'], data['fcf_hist'], alpha=0.1, color='#3CB371')
                 axs[1].set_title("Free Cash Flow ($M)", pad=15, fontweight='bold')
                 
-                # ROE Chart
                 axs[2].plot(data['years'], data['roe_hist'], marker='^', color='#F6AE2D', linewidth=2.5)
                 axs[2].fill_between(data['years'], data['roe_hist'], alpha=0.1, color='#F6AE2D')
                 axs[2].set_title("Return on Equity (%)", pad=15, fontweight='bold')
