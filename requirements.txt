@@ -3,3 +3,4 @@ yfinance
 google-generativeai
 matplotlib
 pandas
+requests
