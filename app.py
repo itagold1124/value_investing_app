@@ -21,12 +21,24 @@ st.set_page_config(
 st.markdown("""
     <style>
     .stMetric { background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 8px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: transparent; border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("📈 AI-Powered Value Investing Terminal")
+
+# ==========================================
+# Helper Function for Formatting
+# ==========================================
+def format_large_number(num):
+    if not isinstance(num, (int, float)) or num == 0:
+        return "N/A"
+    if num >= 1e12:
+        return f"${num/1e12:.2f}T"
+    if num >= 1e9:
+        return f"${num/1e9:.2f}B"
+    if num >= 1e6:
+        return f"${num/1e6:.2f}M"
+    return f"${num:.2f}"
 
 # ==========================================
 # 2. STATE MANAGEMENT & AUTH
@@ -73,6 +85,7 @@ def fetch_financial_data(ticker_symbol):
     fcf = info.get('freeCashflow', 0.0)
     total_cash = info.get('totalCash', 0.0)
     total_debt = info.get('totalDebt', 0.0)
+    market_cap = info.get('marketCap', 0.0)
     
     dcf_fair_value = 0.0
     if fcf > 0 and shares > 0:
@@ -117,11 +130,16 @@ def fetch_financial_data(ticker_symbol):
     return {
         "price": price,
         "dcf_fair_value": dcf_fair_value,
+        "market_cap": market_cap,
         "pe": info.get('trailingPE', 'N/A'),
         "fwd_pe": info.get('forwardPE', 'N/A'),
         "pb": info.get('priceToBook', 'N/A'),
         "debt_eq": info.get('debtToEquity', 'N/A'),
         "margin": info.get('operatingMargins', 0.0) * 100 if info.get('operatingMargins') else 'N/A',
+        "roa": info.get('returnOnAssets', 0.0) * 100 if info.get('returnOnAssets') else 'N/A',
+        "roe": current_roe if current_roe else 'N/A',
+        "roi": info.get('returnOnCapital', 'N/A'), # Yahoo doesn't always provide this
+        "price_to_fcf": (market_cap / fcf) if (fcf > 0 and market_cap > 0) else 'N/A',
         "years": dynamic_years,
         "eps_hist": [current_eps * 0.75, current_eps * 0.82, current_eps * 0.88, current_eps * 0.95, current_eps],
         "fcf_hist": [current_fcf_m * 0.8, current_fcf_m * 0.85, current_fcf_m * 0.9, current_fcf_m * 0.95, current_fcf_m],
@@ -253,52 +271,88 @@ else:
                 st.error(f"### 🔴 SELL SIGNAL\n**Overvalued:** {abs(mos_pct):.1f}% over Intrinsic Value (${fv:.2f}). Poor margin of safety. Capital destruction risk.")
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- TABS LAYOUT ---
-            tab1, tab2, tab3 = st.tabs(["📊 Valuation & Metrics", "📈 5-Year Trends", "🤖 AI Analyst Thesis"])
+
+            # ==========================================
+            # SECTION 1: VALUATION & METRICS
+            # ==========================================
+            st.subheader("📊 Valuation & Core Metrics")
             
-            with tab1:
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Current Price", f"${price:.2f}")
-                col2.metric("DCF Fair Value", f"${fv:.2f}" if fv > 0 else "N/A", delta=f"{mos_pct:.1f}% MoS" if fv > 0 else None)
-                col3.metric("Trailing P/E", data['pe'])
-                col4.metric("Forward P/E", data['fwd_pe'])
-                
-                st.markdown("### 🏛️ Balance Sheet & Efficiency")
-                m_col1, m_col2, m_col3 = st.columns(3)
-                m_col1.metric("Price-to-Book (P/B)", data['pb'])
-                m_col2.metric("Debt-to-Equity", data['debt_eq'])
-                op_margin = data['margin']
-                m_col3.metric("Operating Margin", f"{op_margin:.1f}%" if isinstance(op_margin, float) else op_margin)
+            # Row 1: Primary Value Metrics
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Current Price", f"${price:.2f}")
+            col2.metric("DCF Fair Value", f"${fv:.2f}" if fv > 0 else "N/A", delta=f"{mos_pct:.1f}% MoS" if fv > 0 else None)
+            col3.metric("Market Cap", format_large_number(data['market_cap']))
+            
+            p_fcf = data['price_to_fcf']
+            col4.metric("Price / FCF", f"{p_fcf:.2f}" if isinstance(p_fcf, float) else p_fcf)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Row 2: Standard Ratios
+            r2_col1, r2_col2, r2_col3, r2_col4 = st.columns(4)
+            r2_col1.metric("Trailing P/E", data['pe'])
+            r2_col2.metric("Forward P/E", data['fwd_pe'])
+            r2_col3.metric("Price-to-Book (P/B)", data['pb'])
+            r2_col4.metric("Debt-to-Equity", data['debt_eq'])
 
-            with tab2:
-                fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-                plt.subplots_adjust(wspace=0.3)
-                
-                for ax in axs:
-                    ax.spines['top'].set_visible(False)
-                    ax.spines['right'].set_visible(False)
-                    ax.grid(axis='y', linestyle='--', alpha=0.3)
-                
-                axs[0].plot(data['years'], data['eps_hist'], marker='o', color='#2E86AB', linewidth=2.5)
-                axs[0].fill_between(data['years'], data['eps_hist'], alpha=0.1, color='#2E86AB')
-                axs[0].set_title("Earnings Per Share (EPS)", pad=15, fontweight='bold')
-                
-                axs[1].plot(data['years'], data['fcf_hist'], marker='s', color='#3CB371', linewidth=2.5)
-                axs[1].fill_between(data['years'], data['fcf_hist'], alpha=0.1, color='#3CB371')
-                axs[1].set_title("Free Cash Flow ($M)", pad=15, fontweight='bold')
-                
-                axs[2].plot(data['years'], data['roe_hist'], marker='^', color='#F6AE2D', linewidth=2.5)
-                axs[2].fill_between(data['years'], data['roe_hist'], alpha=0.1, color='#F6AE2D')
-                axs[2].set_title("Return on Equity (%)", pad=15, fontweight='bold')
-                
-                st.pyplot(fig, clear_figure=True)
+            st.markdown("<br>", unsafe_allow_html=True)
 
-            with tab3:
-                if not API_KEY:
-                    st.warning("Enter your Gemini API Key in the sidebar to view the AI Thesis.")
-                else:
-                    thesis = fetch_concise_ai_thesis(
-                        ticker, price, fv, 
-                        data['eps_hist'][-1], data['roe_hist'][-1], data['fcf_hist'][-1]
-                    )
-                    st.markdown(thesis)
+            # Row 3: Profitability & Efficiency
+            st.markdown("#### Profitability & Returns")
+            r3_col1, r3_col2, r3_col3, r3_col4 = st.columns(4)
+            
+            roe_val = data['roe']
+            r3_col1.metric("Return on Equity (ROE)", f"{roe_val:.1f}%" if isinstance(roe_val, float) else roe_val)
+            
+            roa_val = data['roa']
+            r3_col2.metric("Return on Assets (ROA)", f"{roa_val:.1f}%" if isinstance(roa_val, float) else roa_val)
+            
+            roi_val = data['roi']
+            r3_col3.metric("Return on Investment (ROI)", f"{roi_val:.1f}%" if isinstance(roi_val, float) else roi_val)
+            
+            op_margin = data['margin']
+            r3_col4.metric("Operating Margin", f"{op_margin:.1f}%" if isinstance(op_margin, float) else op_margin)
+
+            st.divider()
+
+            # ==========================================
+            # SECTION 2: 5-YEAR TRENDS
+            # ==========================================
+            st.subheader("📈 5-Year Trends")
+            
+            fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+            plt.subplots_adjust(wspace=0.3)
+            
+            for ax in axs:
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.grid(axis='y', linestyle='--', alpha=0.3)
+            
+            axs[0].plot(data['years'], data['eps_hist'], marker='o', color='#2E86AB', linewidth=2.5)
+            axs[0].fill_between(data['years'], data['eps_hist'], alpha=0.1, color='#2E86AB')
+            axs[0].set_title("Earnings Per Share (EPS)", pad=15, fontweight='bold')
+            
+            axs[1].plot(data['years'], data['fcf_hist'], marker='s', color='#3CB371', linewidth=2.5)
+            axs[1].fill_between(data['years'], data['fcf_hist'], alpha=0.1, color='#3CB371')
+            axs[1].set_title("Free Cash Flow ($M)", pad=15, fontweight='bold')
+            
+            axs[2].plot(data['years'], data['roe_hist'], marker='^', color='#F6AE2D', linewidth=2.5)
+            axs[2].fill_between(data['years'], data['roe_hist'], alpha=0.1, color='#F6AE2D')
+            axs[2].set_title("Return on Equity (%)", pad=15, fontweight='bold')
+            
+            st.pyplot(fig, clear_figure=True)
+
+            st.divider()
+
+            # ==========================================
+            # SECTION 3: AI ANALYST THESIS
+            # ==========================================
+            st.subheader("🤖 AI Analyst Thesis")
+            if not API_KEY:
+                st.warning("Enter your Gemini API Key in the sidebar to view the AI Thesis.")
+            else:
+                thesis = fetch_concise_ai_thesis(
+                    ticker, price, fv, 
+                    data['eps_hist'][-1], data['roe_hist'][-1], data['fcf_hist'][-1]
+                )
+                st.markdown(thesis)
