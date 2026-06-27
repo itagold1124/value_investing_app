@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 import json
-import requests  # Used to call Yahoo Finance Search API directly
+import requests
 
 # 1. SETUP PAGE AND AI
 st.set_page_config(page_title="AI Value Investing Platform", layout="wide")
@@ -18,7 +18,7 @@ if not API_KEY:
 
 if API_KEY:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash")
     
     # Initialize watchlist and structural states in memory
     if "my_watchlist" not in st.session_state:
@@ -48,12 +48,13 @@ if API_KEY:
         
         # 1. LIVE YAHOO FINANCE SEARCH ENGINE FEATURE
         st.subheader("🔍 Find & Verify via Yahoo Finance")
-        search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Microsoft):", "")
+        
+        # אנחנו משתמשים במפתח ייחודי כדי שהטקסט לא יתאפס בצורה מוזרה בזמן שימוש מרובה
+        search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Microsoft):", key="modal_search_input")
 
         if search_query:
             with st.spinner("Querying Yahoo Finance directory..."):
                 try:
-                    # Direct query endpoint used by Yahoo Finance's own front-end auto-complete feature
                     url = f"https://query2.finance.yahoo.com/v1/finance/search?q={search_query}&quotesCount=6&newsCount=0"
                     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
                     response = requests.get(url, headers=headers)
@@ -61,7 +62,6 @@ if API_KEY:
                     if response.status_code == 200:
                         search_results = response.json().get("quotes", [])
                         
-                        # Filter down to entries that actually have a valid exchange and corporate name
                         valid_matches = []
                         for item in search_results:
                             symbol = item.get("symbol")
@@ -78,6 +78,8 @@ if API_KEY:
                         
                         if valid_matches:
                             options_map = {item["display_name"]: item for item in valid_matches}
+                            
+                            # הוספת כפתור ייעודי להוספה במקום הפעלה אוטומטית שסוגרת את החלון
                             dropdown_selection = st.selectbox(
                                 "👇 Select the exact company from Yahoo Finance results:",
                                 options=["-- Select Company --"] + list(options_map.keys())
@@ -87,11 +89,11 @@ if API_KEY:
                                 chosen_item = options_map[dropdown_selection]
                                 saved_ticker = chosen_item["ticker"]
                                 
-                                # Add directly to watchlist state
                                 if saved_ticker not in st.session_state.my_watchlist:
                                     st.session_state.my_watchlist.append(saved_ticker)
                                     st.session_state.company_names[saved_ticker] = chosen_item["company_name"]
-                                    st.success(f"Added {chosen_item['company_name']} (`{saved_ticker}`) to your list!")
+                                    st.toast(f"Added {chosen_item['company_name']}!", icon="✅")
+                                    # במקום st.rerun שסוגר את הדיאלוג, אנחנו רק מרעננים את הפופאפ הפנימי
                                     st.rerun()
                         else:
                             st.warning("No active listings found on Yahoo Finance for your entry.")
@@ -106,18 +108,23 @@ if API_KEY:
         if not st.session_state.my_watchlist:
             st.info("Your watchlist is currently empty.")
         else:
-            for ticker in sorted(st.session_state.my_watchlist):
+            # רצים על עותק של הרשימה כדי שנוכל למחוק איברים בזמן ריצה בלי לשבור את הלולאה
+            for ticker in sorted(list(st.session_state.my_watchlist)):
                 c1, c2, c3 = st.columns([1, 4, 1])
+                
+                # כפתור אנליזה - הפעולה היחידה שסוגרת את החלון ומעבירה לדף הראשי
                 if c1.button(f"📊 Analyze", key=f"select_{ticker}", use_container_width=True):
                     st.session_state.active_ticker = ticker
                     st.rerun()
                 
                 c2.write(f"**{ticker}** — {st.session_state.company_names.get(ticker, 'Unknown Name').strip()}")
                 
+                # כפתור מחיקה - מוחק ונשאר בתוך החלון!
                 if c3.button("🗑️", key=f"del_{ticker}", use_container_width=True):
                     st.session_state.my_watchlist.remove(ticker)
                     if ticker in st.session_state.company_names:
                         del st.session_state.company_names[ticker]
+                    st.toast(f"Removed {ticker}", icon="🗑️")
                     st.rerun()
 
     # --- SIDEBAR TRIGGER BUTTON ---
@@ -254,7 +261,7 @@ if API_KEY:
                 - Historical ROE %: {roe_history}
                 - Historical FCF ($M): {fcf_history}
                 
-                Provide a concise value investing breakdown covering valuation validation, management capital efficiency, and a final buy/hold/sell verdict.
+                Provide a portfolio value investing critique for this company.
                 """
                 response_analysis = model.generate_content(analysis_prompt)
                 st.markdown(response_analysis.text)
