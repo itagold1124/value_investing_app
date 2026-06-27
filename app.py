@@ -64,7 +64,7 @@ if API_KEY:
         total_debt = info.get('totalDebt', 0.0)
         shares = info.get('sharesOutstanding', 1.0)
         
-        # Grab current EPS, FCF, and ROE for charts (simplified history for stability)
+        # Grab current EPS, FCF, and ROE for charts
         current_eps = info.get('trailingEps', 0.0)
         current_fcf = info.get('freeCashflow', 0.0) / 1000000 if info.get('freeCashflow') else 0.0
         current_roe = info.get('returnOnEquity', 0.0) * 100 if info.get('returnOnEquity') else 0.0
@@ -73,20 +73,60 @@ if API_KEY:
         fcf_history = [current_fcf * 0.8, current_fcf * 0.85, current_fcf * 0.9, current_fcf * 0.95, current_fcf]
         roe_history = [current_roe * 0.9, current_roe * 0.95, current_roe, current_roe, current_roe]
 
-        # Calculate a basic Discounted Cash Flow (DCF) fairly safely in Python
+        # ---------------------------------------------------------
+        # 📈 ADVANCED DCF CALCULATION (Enterprise to Equity Bridge)
+        # ---------------------------------------------------------
         dcf_fair_value = 0.0
-        if info.get('freeCashflow') and shares > 0:
-            fcf_per_share = info.get('freeCashflow') / shares
-            discount_rate = 0.09
-            growth_rate = 0.05
-            terminal_growth = 0.025
+        free_cash_flow = info.get('freeCashflow', 0.0)
+        total_cash = info.get('totalCash', 0.0)
+        
+        # Only run DCF if the company is actually generating cash and has shares listed
+        if free_cash_flow > 0 and shares > 0:
+            discount_rate = 0.09     # 9% Required Rate of Return
+            terminal_growth = 0.025  # 2.5% Long-term GDP growth
             
-            value = 0
-            for i in range(1, 11):
-                value += (fcf_per_share * ((1 + growth_rate) ** i)) / ((1 + discount_rate) ** i)
-            terminal_value = (fcf_per_share * ((1 + growth_rate) ** 10) * (1 + terminal_growth)) / (discount_rate - terminal_growth)
-            value += terminal_value / ((1 + discount_rate) ** 10)
-            dcf_fair_value = value
+            # 1. Estimate a dynamic initial growth rate based on EPS estimates (capped for safety)
+            trailing_eps = info.get('trailingEps', 0.0)
+            forward_eps = info.get('forwardEps', 0.0)
+            
+            if trailing_eps > 0 and forward_eps > trailing_eps:
+                implied_growth = (forward_eps / trailing_eps) - 1
+                # Cap growth between 2% and 15% to prevent crazy valuations
+                growth_rate = max(0.02, min(implied_growth, 0.15)) 
+            else:
+                growth_rate = 0.05 # Default to 5% if data is missing/negative
+                
+            # 2. Project 10 years of Free Cash Flow with a "Fade"
+            projected_fcf = []
+            current_fcf = free_cash_flow
+            
+            for year in range(1, 11):
+                # Years 1-5: Grow at the estimated growth rate
+                if year <= 5:
+                    current_fcf *= (1 + growth_rate)
+                # Years 6-10: Linear fade down to the terminal growth rate
+                else:
+                    fade_step = (growth_rate - terminal_growth) / 5
+                    current_fcf *= (1 + (growth_rate - fade_step * (year - 5)))
+                
+                projected_fcf.append(current_fcf)
+                
+            # 3. Discount the projected FCFs to Present Value
+            pv_fcf = sum([fcf / ((1 + discount_rate) ** idx) for idx, fcf in enumerate(projected_fcf, 1)])
+            
+            # 4. Calculate Terminal Value (Gordon Growth Model) and discount it
+            terminal_value = (projected_fcf[-1] * (1 + terminal_growth)) / (discount_rate - terminal_growth)
+            pv_terminal_value = terminal_value / ((1 + discount_rate) ** 10)
+            
+            # 5. Calculate Enterprise Value
+            enterprise_value = pv_fcf + pv_terminal_value
+            
+            # 6. Bridge to Equity Value (Add Cash, Subtract Debt)
+            equity_value = enterprise_value + total_cash - total_debt
+            
+            # 7. Get Fair Value Per Share (Ensure it doesn't drop below $0)
+            dcf_fair_value = max(0.0, equity_value / shares)
+        # ---------------------------------------------------------
             
         current_year = datetime.now().year
         dynamic_years = [str(current_year - i) for i in range(4, 0, -1)] + ["Current"]
