@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import os
 import json
 import requests
+import yfinance as yf
 
 # 1. SETUP PAGE AND AI
 st.set_page_config(page_title="AI Value Investing Platform", layout="wide")
