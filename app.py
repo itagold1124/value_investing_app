@@ -26,7 +26,7 @@ if API_KEY:
     st.sidebar.subheader("Valuation Strategy")
     valuation_method = st.sidebar.selectbox(
         "Choose Alternative Valuation Formula:",
-        ["Benjamin Graham Formula (Mature/Stable)", "Asset-Based Valuation (Distressed/Asset-Heavy)"]
+        ["DCF + RDCF Combined Analysis", "Benjamin Graham Formula (Mature/Stable)", "Asset-Based Valuation (Distressed/Asset-Heavy)"]
     )
 
     if st.button("Run Comprehensive Analysis"):
@@ -57,8 +57,12 @@ if API_KEY:
                         "total_assets": 0.0,
                         "total_liabilities": 0.0,
                         "shares_outstanding": 1.0,
-                        "eps_growth_5yr_pct": 5.0
+                        "eps_growth_5yr_pct": 5.0,
+                        "dcf_fair_value": 0.0,
+                        "rdcf_implied_growth_pct": 0.0
                     }}
+                    For dcf_fair_value, calculate a standard 10-year DCF using a conservative 9% discount rate and a 2.5% terminal growth rate.
+                    For rdcf_implied_growth_pct, calculate the free cash flow growth rate the market is currently implying based on the current market price.
                     Estimate values accurately based on the company's annual financial filings if needed.
                     """
                     
@@ -76,9 +80,14 @@ if API_KEY:
                     roe_history = [float(x) for x in financial_data.get("roe_history_pct", [0.0]*5)]
                     eps_growth_5yr = float(financial_data.get("eps_growth_5yr_pct", 5.0))
                     
-                    # --- CALCULATE INTRINSIC VALUE ---
+                    # --- CALCULATE INTRINSIC VALUE BASED ON SELECTION ---
                     fair_value = 0.0
-                    if "Benjamin Graham" in valuation_method:
+                    rdcf_growth = "N/A"
+                    
+                    if "DCF + RDCF" in valuation_method:
+                        fair_value = float(financial_data.get("dcf_fair_value", 0.0))
+                        rdcf_growth = f"{financial_data.get('rdcf_implied_growth_pct', 0.0):.1f}%"
+                    elif "Benjamin Graham" in valuation_method:
                         base_eps = eps_history[-1] if eps_history else 1.0
                         g = max(0.0, eps_growth_5yr)
                         expected_yield = 5.0
@@ -92,18 +101,25 @@ if API_KEY:
                     # Calculate Discount / Premium
                     if fair_value > 0:
                         diff_pct = ((fair_value - current_price) / fair_value) * 100
-                        status_label = "Discount (Margin of Safety)" if diff_pct > 0 else "Premium (Overvalued)"
+                        status_label = "Margin of Safety (Discount)" if diff_pct > 0 else "Premium (Overvalued)"
                         status_val = f"{abs(diff_pct):.1f}%"
                     else:
                         status_label = "Margin"
                         status_val = "N/A"
                         diff_pct = 0.0
 
-                    # --- METRICS CARDS ---
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Calculated Fair Value", f"${fair_value:.2f}", help=f"Based on {valuation_method}")
-                    col2.metric("Current Market Price", f"${current_price:.2f}")
-                    col3.metric(status_label, status_val, delta=f"{diff_pct:.1f}%" if fair_value > 0 else None)
+                    # --- METRICS CARDS (UPDATED TO 4 COLUMNS) ---
+                    if "DCF + RDCF" in valuation_method:
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("DCF Fair Value", f"${fair_value:.2f}")
+                        col2.metric("RDCF Implied Growth", rdcf_growth, help="The growth rate the current stock price assumes")
+                        col3.metric("Current Market Price", f"${current_price:.2f}")
+                        col4.metric(status_label, status_val, delta=f"{diff_pct:.1f}%" if fair_value > 0 else None)
+                    else:
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Calculated Fair Value", f"${fair_value:.2f}", help=f"Based on {valuation_method}")
+                        col2.metric("Current Market Price", f"${current_price:.2f}")
+                        col3.metric(status_label, status_val, delta=f"{diff_pct:.1f}%" if fair_value > 0 else None)
 
                     # --- HISTORICAL TREND GRAPHS ---
                     st.markdown("### 📊 5-Year Historical Performance Trends")
@@ -140,7 +156,8 @@ if API_KEY:
                     analysis_prompt = f"""
                     Analyze the intrinsic valuation for {ticker} based on these values:
                     - Current Price: ${current_price:.2f}
-                    - Calculated Intrinsic Value via {valuation_method}: ${fair_value:.2f}
+                    - DCF Intrinsic Value: ${fair_value:.2f}
+                    - RDCF Implied Market Growth Rate: {rdcf_growth}
                     - Historical EPS: {eps_history}
                     - Historical ROE %: {roe_history}
                     - Historical FCF ($M): {fcf_history}
