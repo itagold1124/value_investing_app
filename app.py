@@ -17,60 +17,99 @@ if not API_KEY:
 
 if API_KEY:
     genai.configure(api_key=API_KEY)
+    model = genai.GenerativeModel("gemini-2.5-flash")
     
-    # --- SIDEBAR: USER CUSTOM WATCHLIST ---
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📋 My Stock List")
-    
-    # Initialize the default list of stocks in memory if it doesn't exist yet
+    # Initialize the watchlist and company names map in memory if they don't exist yet
     if "my_watchlist" not in st.session_state:
         st.session_state.my_watchlist = ["FIG", "INTC", "GOOG", "KO"]
+    
+    if "company_names" not in st.session_state:
+        st.session_state.company_names = {
+            "FIG": "Fortress Investment Group",
+            "INTC": "Intel Corporation",
+            "GOOG": "Alphabet Inc.",
+            "KO": "The Coca-Cola Company"
+        }
         
     if "ticker_search" not in st.session_state:
         st.session_state.ticker_search = "FIG"
 
-    # Box 1: Add a new stock to the custom list
-    new_ticker = st.sidebar.text_input("➕ Add Ticker to My List:", "").strip().upper()
-    if st.sidebar.button("Save to List") and new_ticker:
-        if new_ticker not in st.session_state.my_watchlist:
-            st.session_state.my_watchlist.append(new_ticker)
-            st.sidebar.success(f"Added {new_ticker}!")
-            st.rerun() # Refresh page to show the updated list immediately
-
-    # Box 2: Select a stock from the saved custom list
-    selected_from_list = st.sidebar.selectbox(
-        "🔍 Choose Stock from My List:", 
-        options=["-- Select --"] + sorted(st.session_state.my_watchlist)
-    )
-    
-    # If the user selects a stock from their dropdown list, update the main search box value
-    if selected_from_list != "-- Select --":
-        st.session_state.ticker_search = selected_from_list
-
-    st.sidebar.markdown("---")
-
-    # Main search field (wired directly to our sidebar dropdown selection)
-    tickers_input = st.text_input(
-        "Enter Stock Tickers to Analyze (separated by commas if entering multiples manually):", 
-        st.session_state.ticker_search
-    )
-    tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
-
-    # Valuation Strategy Selector
+    # --- SIDEBAR: SYSTEM CONTROLS ---
     st.sidebar.subheader("Valuation Strategy")
     valuation_method = st.sidebar.selectbox(
         "Choose Alternative Valuation Formula:",
         ["DCF + RDCF Combined Analysis", "Benjamin Graham Formula (Mature/Stable)", "Asset-Based Valuation (Distressed/Asset-Heavy)"]
     )
 
+    # --- THE CENTRAL POPUP WINDOW FUNCTION ---
+    @st.dialog("📋 My Stock List Manager", width="large")
+    def open_watchlist_manager():
+        st.write("Manage your custom watchlist. Add new stocks, check their full names, or remove tickers below.")
+        
+        # 1. Add new ticker section
+        col_a, col_b = st.columns([3, 1])
+        new_ticker = col_a.text_input("➕ Add Ticker Symbol:", "").strip().upper()
+        
+        if col_b.button("Save Stock", use_container_width=True) and new_ticker:
+            if new_ticker not in st.session_state.my_watchlist:
+                with st.spinner(f"Resolving name for {new_ticker}..."):
+                    try:
+                        name_prompt = f"What is the official corporate name for stock ticker symbol {new_ticker}? Return ONLY the short clean company name, nothing else."
+                        name_res = model.generate_content(name_prompt).text.strip()
+                        st.session_state.company_names[new_ticker] = name_res
+                    except:
+                        st.session_state.company_names[new_ticker] = "Unknown Company"
+                        
+                st.session_state.my_watchlist.append(new_ticker)
+                st.success(f"Added {new_ticker}!")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("Your Saved Watchlist")
+
+        # 2. Display and Edit/Delete existing entries
+        if not st.session_state.my_watchlist:
+            st.info("Your watchlist is currently empty.")
+        else:
+            for ticker in sorted(st.session_state.my_watchlist):
+                c1, c2, c3 = st.columns([1, 4, 1])
+                # Clickable symbol button to choose it instantly
+                if c1.button(f"🔍 {ticker}", key=f"select_{ticker}", use_container_width=True):
+                    st.session_state.ticker_search = ticker
+                    st.rerun()
+                
+                # Display the resolved company name
+                c2.write(f"**{st.session_state.company_names.get(ticker, 'Loading name...')}**")
+                
+                # Delete button
+                if c3.button("🗑️", key=f"del_{ticker}", use_container_width=True):
+                    st.session_state.my_watchlist.remove(ticker)
+                    if ticker in st.session_state.company_names:
+                        del st.session_state.company_names[ticker]
+                    st.rerun()
+
+    # --- SIDEBAR TRIGGER BUTTON ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📋 Workspace")
+    if st.sidebar.button("⚙️ Manage My Stock List", use_container_width=True):
+        open_watchlist_manager()
+    st.sidebar.markdown("---")
+
+    # Main search field (wired directly to our picker selection)
+    tickers_input = st.text_input(
+        "Enter Stock Tickers to Analyze (separated by commas if entering multiples manually):", 
+        st.session_state.ticker_search
+    )
+    tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+
     if st.button("Run Comprehensive Analysis"):
         for ticker in tickers:
-            st.markdown(f"## 🏢 Analysis for {ticker}")
+            # Look up clean company name to show in title banner
+            comp_name = st.session_state.company_names.get(ticker, ticker)
+            st.markdown(f"## 🏢 {comp_name} ({ticker})")
             
             with st.spinner(f"AI is gathering 5-year financial history for {ticker}..."):
                 try:
-                    model = genai.GenerativeModel("gemini-2.5-flash")
-                    
                     data_prompt = f"""
                     You are an expert financial database. Fetch the current stock price and last 5 years of historical financial data for the ticker symbol {ticker}.
                     Provide the data in a strict, valid JSON format. Do not write any markdown code blocks or introduction text, just the raw JSON.
