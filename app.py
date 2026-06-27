@@ -18,8 +18,42 @@ if not API_KEY:
 if API_KEY:
     genai.configure(api_key=API_KEY)
     
-    # User inputs
-    tickers_input = st.text_input("Enter Stock Tickers (separated by commas, e.g., FIG, INTC, O):", "FIG")
+    # --- SIDEBAR: USER CUSTOM WATCHLIST ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📋 My Stock List")
+    
+    # Initialize the default list of stocks in memory if it doesn't exist yet
+    if "my_watchlist" not in st.session_state:
+        st.session_state.my_watchlist = ["FIG", "INTC", "GOOG", "KO"]
+        
+    if "ticker_search" not in st.session_state:
+        st.session_state.ticker_search = "FIG"
+
+    # Box 1: Add a new stock to the custom list
+    new_ticker = st.sidebar.text_input("➕ Add Ticker to My List:", "").strip().upper()
+    if st.sidebar.button("Save to List") and new_ticker:
+        if new_ticker not in st.session_state.my_watchlist:
+            st.session_state.my_watchlist.append(new_ticker)
+            st.sidebar.success(f"Added {new_ticker}!")
+            st.rerun() # Refresh page to show the updated list immediately
+
+    # Box 2: Select a stock from the saved custom list
+    selected_from_list = st.sidebar.selectbox(
+        "🔍 Choose Stock from My List:", 
+        options=["-- Select --"] + sorted(st.session_state.my_watchlist)
+    )
+    
+    # If the user selects a stock from their dropdown list, update the main search box value
+    if selected_from_list != "-- Select --":
+        st.session_state.ticker_search = selected_from_list
+
+    st.sidebar.markdown("---")
+
+    # Main search field (wired directly to our sidebar dropdown selection)
+    tickers_input = st.text_input(
+        "Enter Stock Tickers to Analyze (separated by commas if entering multiples manually):", 
+        st.session_state.ticker_search
+    )
     tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
     # Valuation Strategy Selector
@@ -35,7 +69,6 @@ if API_KEY:
             
             with st.spinner(f"AI is gathering 5-year financial history for {ticker}..."):
                 try:
-                    # Leverage Gemini to fetch structured historical financial data securely
                     model = genai.GenerativeModel("gemini-2.5-flash")
                     
                     data_prompt = f"""
@@ -67,12 +100,9 @@ if API_KEY:
                     """
                     
                     response = model.generate_content(data_prompt)
-                    
-                    # Clean response text if model wrapped it in markdown code blocks
                     clean_text = response.text.strip().replace("```json", "").replace("```", "")
                     financial_data = json.loads(clean_text)
                     
-                    # Extract variables safely from the AI output
                     current_price = float(financial_data.get("currentPrice", 0.0))
                     year_labels = financial_data.get("years", ["2021", "2022", "2023", "2024", "2025"])
                     eps_history = [float(x) for x in financial_data.get("eps_history", [0.0]*5)]
@@ -80,7 +110,6 @@ if API_KEY:
                     roe_history = [float(x) for x in financial_data.get("roe_history_pct", [0.0]*5)]
                     eps_growth_5yr = float(financial_data.get("eps_growth_5yr_pct", 5.0))
                     
-                    # --- CALCULATE INTRINSIC VALUE BASED ON SELECTION ---
                     fair_value = 0.0
                     rdcf_growth = "N/A"
                     
@@ -98,7 +127,6 @@ if API_KEY:
                         shares_out = float(financial_data.get("shares_outstanding", 1.0))
                         fair_value = (total_assets - total_liab) / shares_out if shares_out else 0.0
                     
-                    # Calculate Discount / Premium
                     if fair_value > 0:
                         diff_pct = ((fair_value - current_price) / fair_value) * 100
                         status_label = "Margin of Safety (Discount)" if diff_pct > 0 else "Premium (Overvalued)"
@@ -108,7 +136,6 @@ if API_KEY:
                         status_val = "N/A"
                         diff_pct = 0.0
 
-                    # --- METRICS CARDS (UPDATED TO 4 COLUMNS) ---
                     if "DCF + RDCF" in valuation_method:
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("DCF Fair Value", f"${fair_value:.2f}")
@@ -121,7 +148,6 @@ if API_KEY:
                         col2.metric("Current Market Price", f"${current_price:.2f}")
                         col3.metric(status_label, status_val, delta=f"{diff_pct:.1f}%" if fair_value > 0 else None)
 
-                    # --- HISTORICAL TREND GRAPHS ---
                     st.markdown("### 📊 5-Year Historical Performance Trends")
                     fig, axs = plt.subplots(1, 3, figsize=(18, 4))
                     
@@ -140,7 +166,6 @@ if API_KEY:
                     st.pyplot(fig)
                     plt.close()
 
-                    # Core Multiples Overview Table
                     metrics_df = pd.DataFrame([{
                         "Ticker": ticker,
                         "P/E Ratio": financial_data.get("pe_ratio", "N/A"),
@@ -151,7 +176,6 @@ if API_KEY:
                     }])
                     st.dataframe(metrics_df.set_index("Ticker"))
 
-                    # --- AI VALUATION CRITIQUE ---
                     st.markdown("### 🤖 Deep Value Thesis & Risk Assessment")
                     analysis_prompt = f"""
                     Analyze the intrinsic valuation for {ticker} based on these values:
