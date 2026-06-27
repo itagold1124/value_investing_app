@@ -20,7 +20,7 @@ if API_KEY:
     genai.configure(api_key=API_KEY)
     
     # Using 2.0-flash for high rate limits!
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     
     # Initialize watchlist and structural states in memory
     if "my_watchlist" not in st.session_state:
