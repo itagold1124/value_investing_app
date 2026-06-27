@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 import json
+import requests  # Used to call Yahoo Finance Search API directly
 
 # 1. SETUP PAGE AND AI
 st.set_page_config(page_title="AI Value Investing Platform", layout="wide")
@@ -17,7 +18,7 @@ if not API_KEY:
 
 if API_KEY:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash")
     
     # Initialize watchlist and structural states in memory
     if "my_watchlist" not in st.session_state:
@@ -43,51 +44,59 @@ if API_KEY:
     # --- CENTRAL POPUP WATCHLIST MANAGER ---
     @st.dialog("📋 My Stock List Manager", width="large")
     def open_watchlist_manager():
-        st.write("Search for a company to verify its ticker, or manage your saved items below.")
+        st.write("Search Yahoo Finance to verify active tickers, or manage saved items below.")
         
-        # 1. SEARCH & VERIFY FEATURE INSIDE THE POPUP
-        st.subheader("🔍 Find & Verify Public Companies")
-        search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Coca-Cola):", "")
+        # 1. LIVE YAHOO FINANCE SEARCH ENGINE FEATURE
+        st.subheader("🔍 Find & Verify via Yahoo Finance")
+        search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Microsoft):", "")
 
         if search_query:
-            with st.spinner("Searching global exchanges for matches..."):
+            with st.spinner("Querying Yahoo Finance directory..."):
                 try:
-                    search_prompt = f"""
-                    The user typed: '{search_query}'. Find up to 5 matching publicly traded companies currently listed on global stock exchanges.
-                    Provide the results in a strict, valid JSON format. Do not write markdown blocks or intro text, just raw JSON.
+                    # Direct query endpoint used by Yahoo Finance's own front-end auto-complete feature
+                    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={search_query}&quotesCount=6&newsCount=0"
+                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+                    response = requests.get(url, headers=headers)
                     
-                    JSON Structure:
-                    {{
-                        "matches": [
-                            {{"display_name": "Apple Inc. (AAPL - NASDAQ)", "ticker": "AAPL", "company_name": "Apple Inc."}},
-                            {{"display_name": "Intel Corporation (INTC - NASDAQ)", "ticker": "INTC", "company_name": "Intel Corporation"}}
-                        ]
-                    }}
-                    Filter out private companies (like Figma). If no valid public listings exist, return an empty list.
-                    """
-                    search_response = model.generate_content(search_prompt)
-                    clean_search_text = search_response.text.strip().replace("```json", "").replace("```", "")
-                    search_results = json.loads(clean_search_text).get("matches", [])
-                    
-                    if search_results:
-                        options_map = {item["display_name"]: item for item in search_results}
-                        dropdown_selection = st.selectbox(
-                            "👇 Select the exact company to add to your list:",
-                            options=["-- Select Company --"] + list(options_map.keys())
-                        )
+                    if response.status_code == 200:
+                        search_results = response.json().get("quotes", [])
                         
-                        if dropdown_selection != "-- Select Company --":
-                            chosen_item = options_map[dropdown_selection]
-                            saved_ticker = chosen_item["ticker"]
+                        # Filter down to entries that actually have a valid exchange and corporate name
+                        valid_matches = []
+                        for item in search_results:
+                            symbol = item.get("symbol")
+                            shortname = item.get("shortname") or item.get("longname")
+                            exch = item.get("exchange")
                             
-                            # Add to watchlist automatically upon selection
-                            if saved_ticker not in st.session_state.my_watchlist:
-                                st.session_state.my_watchlist.append(saved_ticker)
-                                st.session_state.company_names[saved_ticker] = chosen_item["company_name"]
-                                st.success(f"Added {chosen_item['company_name']} (`{saved_ticker}`) to your list!")
-                                st.rerun()
+                            if symbol and shortname and exch:
+                                display_text = f"{shortname} ({symbol} - {exch})"
+                                valid_matches.append({
+                                    "display_name": display_text,
+                                    "ticker": symbol,
+                                    "company_name": shortname
+                                })
+                        
+                        if valid_matches:
+                            options_map = {item["display_name"]: item for item in valid_matches}
+                            dropdown_selection = st.selectbox(
+                                "👇 Select the exact company from Yahoo Finance results:",
+                                options=["-- Select Company --"] + list(options_map.keys())
+                            )
+                            
+                            if dropdown_selection != "-- Select Company --":
+                                chosen_item = options_map[dropdown_selection]
+                                saved_ticker = chosen_item["ticker"]
+                                
+                                # Add directly to watchlist state
+                                if saved_ticker not in st.session_state.my_watchlist:
+                                    st.session_state.my_watchlist.append(saved_ticker)
+                                    st.session_state.company_names[saved_ticker] = chosen_item["company_name"]
+                                    st.success(f"Added {chosen_item['company_name']} (`{saved_ticker}`) to your list!")
+                                    st.rerun()
+                        else:
+                            st.warning("No active listings found on Yahoo Finance for your entry.")
                     else:
-                        st.warning("No active publicly traded companies matched your entry.")
+                        st.error("Could not communicate with Yahoo Finance search server.")
                 except Exception as e:
                     st.error(f"Search directory error: {str(e)}")
 
@@ -99,14 +108,12 @@ if API_KEY:
         else:
             for ticker in sorted(st.session_state.my_watchlist):
                 c1, c2, c3 = st.columns([1, 4, 1])
-                # Select button: locks the stock in and closes/reloads main view
                 if c1.button(f"📊 Analyze", key=f"select_{ticker}", use_container_width=True):
                     st.session_state.active_ticker = ticker
                     st.rerun()
                 
-                c2.write(f"**{ticker}** — {st.session_state.company_names.get(ticker, 'Loading name...').strip()}")
+                c2.write(f"**{ticker}** — {st.session_state.company_names.get(ticker, 'Unknown Name').strip()}")
                 
-                # Delete button
                 if c3.button("🗑️", key=f"del_{ticker}", use_container_width=True):
                     st.session_state.my_watchlist.remove(ticker)
                     if ticker in st.session_state.company_names:
