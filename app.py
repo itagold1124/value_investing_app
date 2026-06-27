@@ -18,7 +18,9 @@ if not API_KEY:
 
 if API_KEY:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    
+    # Using 2.0-flash for high rate limits!
+    model = genai.GenerativeModel("gemini-2.0-flash")
     
     # Initialize watchlist and structural states in memory
     if "my_watchlist" not in st.session_state:
@@ -41,93 +43,88 @@ if API_KEY:
         ["DCF + RDCF Combined Analysis", "Benjamin Graham Formula (Mature/Stable)", "Asset-Based Valuation (Distressed/Asset-Heavy)"]
     )
 
+    # --- NATIVE CALLBACK FUNCTIONS (Runs in background without closing windows) ---
+    def remove_stock_callback(ticker_to_remove):
+        if ticker_to_remove in st.session_state.my_watchlist:
+            st.session_state.my_watchlist.remove(ticker_to_remove)
+        if ticker_to_remove in st.session_state.company_names:
+            del st.session_state.company_names[ticker_to_remove]
+
     # --- CENTRAL POPUP WATCHLIST MANAGER ---
     @st.dialog("📋 My Stock List Manager", width="large")
     def open_watchlist_manager():
         st.write("Search Yahoo Finance to verify active tickers, or manage saved items below.")
         
-        # שימוש ב-Fragment פנימי כדי לבודד את הרענון של הרשימה ולמנוע את סגירת החלון
-        @st.fragment()
-        def render_watchlist_interface():
-            st.subheader("🔍 Find & Verify via Yahoo Finance")
-            search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Microsoft):", key="modal_search_input")
+        st.subheader("🔍 Find & Verify via Yahoo Finance")
+        search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Microsoft):", key="modal_search_input")
 
-            if search_query:
-                with st.spinner("Querying Yahoo Finance directory..."):
-                    try:
-                        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={search_query}&quotesCount=6&newsCount=0"
-                        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-                        response = requests.get(url, headers=headers)
+        if search_query:
+            with st.spinner("Querying Yahoo Finance directory..."):
+                try:
+                    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={search_query}&quotesCount=6&newsCount=0"
+                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+                    response = requests.get(url, headers=headers)
+                    
+                    if response.status_code == 200:
+                        search_results = response.json().get("quotes", [])
                         
-                        if response.status_code == 200:
-                            search_results = response.json().get("quotes", [])
+                        valid_matches = []
+                        for item in search_results:
+                            symbol = item.get("symbol")
+                            shortname = item.get("shortname") or item.get("longname")
+                            exch = item.get("exchange")
                             
-                            valid_matches = []
-                            for item in search_results:
-                                symbol = item.get("symbol")
-                                shortname = item.get("shortname") or item.get("longname")
-                                exch = item.get("exchange")
-                                
-                                if symbol and shortname and exch:
-                                    display_text = f"{shortname} ({symbol} - {exch})"
-                                    valid_matches.append({
-                                        "display_name": display_text,
-                                        "ticker": symbol,
-                                        "company_name": shortname
-                                    })
+                            if symbol and shortname and exch:
+                                display_text = f"{shortname} ({symbol} - {exch})"
+                                valid_matches.append({
+                                    "display_name": display_text,
+                                    "ticker": symbol,
+                                    "company_name": shortname
+                                })
+                        
+                        if valid_matches:
+                            options_map = {item["display_name"]: item for item in valid_matches}
+                            dropdown_selection = st.selectbox(
+                                "👇 Select the exact company from Yahoo Finance results:",
+                                options=["-- Select Company --"] + list(options_map.keys()),
+                                key="modal_dropdown_selection"
+                            )
                             
-                            if valid_matches:
-                                options_map = {item["display_name"]: item for item in valid_matches}
-                                dropdown_selection = st.selectbox(
-                                    "👇 Select the exact company from Yahoo Finance results:",
-                                    options=["-- Select Company --"] + list(options_map.keys()),
-                                    key="modal_dropdown_selection"
-                                )
+                            if dropdown_selection != "-- Select Company --":
+                                chosen_item = options_map[dropdown_selection]
+                                saved_ticker = chosen_item["ticker"]
                                 
-                                if dropdown_selection != "-- Select Company --":
-                                    chosen_item = options_map[dropdown_selection]
-                                    saved_ticker = chosen_item["ticker"]
-                                    
-                                    if saved_ticker not in st.session_state.my_watchlist:
-                                        st.session_state.my_watchlist.append(saved_ticker)
-                                        st.session_state.company_names[saved_ticker] = chosen_item["company_name"]
-                                        st.toast(f"Added {chosen_item['company_name']}!", icon="✅")
-                                        st.rerun() # מרענן רק את ה-Fragment הנוכחי בתוך החלון!
-                            else:
-                                st.warning("No active listings found on Yahoo Finance for your entry.")
+                                if saved_ticker not in st.session_state.my_watchlist:
+                                    st.session_state.my_watchlist.append(saved_ticker)
+                                    st.session_state.company_names[saved_ticker] = chosen_item["company_name"]
+                                    st.toast(f"Added {chosen_item['company_name']}!", icon="✅")
+                                    # Safe to rerun here because adding doesn't delete the UI element that triggered it
+                                    st.rerun() 
                         else:
-                            st.error("Could not communicate with Yahoo Finance search server.")
-                    except Exception as e:
-                        st.error(f"Search directory error: {str(e)}")
+                            st.warning("No active listings found on Yahoo Finance for your entry.")
+                    else:
+                        st.error("Could not communicate with Yahoo Finance search server.")
+                except Exception as e:
+                    st.error(f"Search directory error: {str(e)}")
 
-            st.markdown("---")
-            st.subheader("Your Saved Watchlist")
+        st.markdown("---")
+        st.subheader("Your Saved Watchlist")
 
-            if not st.session_state.my_watchlist:
-                st.info("Your watchlist is currently empty.")
-            else:
-                for ticker in sorted(list(st.session_state.my_watchlist)):
-                    c1, c2, c3 = st.columns([1.5, 4, 1])
-                    
-                    # כפתור אנליזה - לחיצה עליו משנה את המצב הכללי ומאתחלת את כל האתר (סוגרת את החלון בכוונה)
-                    if c1.button(f"📊 Analyze {ticker}", key=f"select_{ticker}", use_container_width=True):
-                        st.session_state.active_ticker = ticker
-                        # שימוש בטריק של ג'אווה-סקריפט מובנה כדי לסגור את הדיאלוג בצורה חלקה ולרענן את כל האתר למצב החדש
-                        st.write("<script>window.parent.document.querySelector('.stDialog').remove();</script>", unsafe_allow_html=True)
-                        st.rerun()
-                    
-                    c2.write(f"**{ticker}** — {st.session_state.company_names.get(ticker, 'Unknown Name').strip()}")
-                    
-                    # כפתור מחיקה - עכשיו הוא מוחק ומריץ מחדש אך ורק את ה-Fragment הפנימי, החלון נשאר פתוח לחלוטין!
-                    if c3.button("🗑️", key=f"del_{ticker}", use_container_width=True):
-                        st.session_state.my_watchlist.remove(ticker)
-                        if ticker in st.session_state.company_names:
-                            del st.session_state.company_names[ticker]
-                        st.toast(f"Removed {ticker}", icon="🗑️")
-                        st.rerun() # מרענן רק את ה-Fragment הפנימי
-
-        # הפעלת הממשק המבודד בתוך החלון המרכזי
-        render_watchlist_interface()
+        if not st.session_state.my_watchlist:
+            st.info("Your watchlist is currently empty.")
+        else:
+            for ticker in sorted(list(st.session_state.my_watchlist)):
+                c1, c2, c3 = st.columns([1.5, 4, 1])
+                
+                if c1.button(f"📊 Analyze {ticker}", key=f"select_{ticker}", use_container_width=True):
+                    st.session_state.active_ticker = ticker
+                    st.write("<script>window.parent.document.querySelector('.stDialog').remove();</script>", unsafe_allow_html=True)
+                    st.rerun()
+                
+                c2.write(f"**{ticker}** — {st.session_state.company_names.get(ticker, 'Unknown Name').strip()}")
+                
+                # FIX: Using on_click callback to delete without forcing a disruptive rerun
+                c3.button("🗑️", key=f"del_{ticker}", on_click=remove_stock_callback, args=(ticker,), use_container_width=True)
 
     # --- SIDEBAR TRIGGER BUTTON ---
     st.sidebar.markdown("---")
