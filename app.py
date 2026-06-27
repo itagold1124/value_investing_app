@@ -51,7 +51,6 @@ if API_KEY:
     def fetch_financial_data_cached(ticker_symbol):
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
-      
         
         # Safely extract metrics (default to 0 or 'N/A' if missing)
         price = info.get('currentPrice', info.get('regularMarketPrice', 0.0))
@@ -88,11 +87,13 @@ if API_KEY:
             terminal_value = (fcf_per_share * ((1 + growth_rate) ** 10) * (1 + terminal_growth)) / (discount_rate - terminal_growth)
             value += terminal_value / ((1 + discount_rate) ** 10)
             dcf_fair_value = value
-          current_year = datetime.now().year
-         dynamic_years = [str(current_year - i) for i in range(4, 0, -1)] + ["Current"]
+            
+        current_year = datetime.now().year
+        dynamic_years = [str(current_year - i) for i in range(4, 0, -1)] + ["Current"]
         
         return {
             "currentPrice": price,
+            "years": dynamic_years,
             "eps_history": eps_history,
             "fcf_history_millions": fcf_history,
             "roe_history_pct": roe_history,
