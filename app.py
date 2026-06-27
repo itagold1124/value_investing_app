@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import os
 import requests
 import yfinance as yf
+from datetime import datetime
 
 # 1. SETUP PAGE AND AI
 st.set_page_config(page_title="AI Value Investing Platform", layout="wide")
@@ -50,6 +51,7 @@ if API_KEY:
     def fetch_financial_data_cached(ticker_symbol):
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
+        current_year = datetime.now().year
         
         # Safely extract metrics (default to 0 or 'N/A' if missing)
         price = info.get('currentPrice', info.get('regularMarketPrice', 0.0))
@@ -89,7 +91,7 @@ if API_KEY:
 
         return {
             "currentPrice": price,
-            "years": ["2020", "2021", "2022", "2023", "Current"],
+         dynamic_years = [str(current_year - i) for i in range(4, 0, -1)] + ["Current"]
             "eps_history": eps_history,
             "fcf_history_millions": fcf_history,
             "roe_history_pct": roe_history,
