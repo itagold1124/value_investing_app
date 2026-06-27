@@ -43,24 +43,53 @@ if API_KEY:
     # --- CENTRAL POPUP WATCHLIST MANAGER ---
     @st.dialog("📋 My Stock List Manager", width="large")
     def open_watchlist_manager():
-        st.write("Manage your custom watchlist. Add new stocks, check their full names, or remove tickers below.")
+        st.write("Search for a company to verify its ticker, or manage your saved items below.")
         
-        col_a, col_b = st.columns([3, 1])
-        new_ticker = col_a.text_input("➕ Add Ticker Symbol to Watchlist:", "").strip().upper()
-        
-        if col_b.button("Save Stock", use_container_width=True) and new_ticker:
-            if new_ticker not in st.session_state.my_watchlist:
-                with st.spinner(f"Resolving name for {new_ticker}..."):
-                    try:
-                        name_prompt = f"What is the official corporate name for stock ticker symbol {new_ticker}? Return ONLY the short clean company name, nothing else."
-                        name_res = model.generate_content(name_prompt).text.strip()
-                        st.session_state.company_names[new_ticker] = name_res
-                    except:
-                        st.session_state.company_names[new_ticker] = "Unknown Company"
+        # 1. SEARCH & VERIFY FEATURE INSIDE THE POPUP
+        st.subheader("🔍 Find & Verify Public Companies")
+        search_query = st.text_input("Type a Company Name or Ticker (e.g., Apple, Intel, Coca-Cola):", "")
+
+        if search_query:
+            with st.spinner("Searching global exchanges for matches..."):
+                try:
+                    search_prompt = f"""
+                    The user typed: '{search_query}'. Find up to 5 matching publicly traded companies currently listed on global stock exchanges.
+                    Provide the results in a strict, valid JSON format. Do not write markdown blocks or intro text, just raw JSON.
+                    
+                    JSON Structure:
+                    {{
+                        "matches": [
+                            {{"display_name": "Apple Inc. (AAPL - NASDAQ)", "ticker": "AAPL", "company_name": "Apple Inc."}},
+                            {{"display_name": "Intel Corporation (INTC - NASDAQ)", "ticker": "INTC", "company_name": "Intel Corporation"}}
+                        ]
+                    }}
+                    Filter out private companies (like Figma). If no valid public listings exist, return an empty list.
+                    """
+                    search_response = model.generate_content(search_prompt)
+                    clean_search_text = search_response.text.strip().replace("```json", "").replace("```", "")
+                    search_results = json.loads(clean_search_text).get("matches", [])
+                    
+                    if search_results:
+                        options_map = {item["display_name"]: item for item in search_results}
+                        dropdown_selection = st.selectbox(
+                            "👇 Select the exact company to add to your list:",
+                            options=["-- Select Company --"] + list(options_map.keys())
+                        )
                         
-                st.session_state.my_watchlist.append(new_ticker)
-                st.success(f"Added {new_ticker}!")
-                st.rerun()
+                        if dropdown_selection != "-- Select Company --":
+                            chosen_item = options_map[dropdown_selection]
+                            saved_ticker = chosen_item["ticker"]
+                            
+                            # Add to watchlist automatically upon selection
+                            if saved_ticker not in st.session_state.my_watchlist:
+                                st.session_state.my_watchlist.append(saved_ticker)
+                                st.session_state.company_names[saved_ticker] = chosen_item["company_name"]
+                                st.success(f"Added {chosen_item['company_name']} (`{saved_ticker}`) to your list!")
+                                st.rerun()
+                    else:
+                        st.warning("No active publicly traded companies matched your entry.")
+                except Exception as e:
+                    st.error(f"Search directory error: {str(e)}")
 
         st.markdown("---")
         st.subheader("Your Saved Watchlist")
@@ -70,77 +99,34 @@ if API_KEY:
         else:
             for ticker in sorted(st.session_state.my_watchlist):
                 c1, c2, c3 = st.columns([1, 4, 1])
-                if c1.button(f"🔍 {ticker}", key=f"select_{ticker}", use_container_width=True):
+                # Select button: locks the stock in and closes/reloads main view
+                if c1.button(f"📊 Analyze", key=f"select_{ticker}", use_container_width=True):
                     st.session_state.active_ticker = ticker
                     st.rerun()
                 
-                c2.write(f"**{st.session_state.company_names.get(ticker, 'Loading name...')}**")
+                c2.write(f"**{ticker}** — {st.session_state.company_names.get(ticker, 'Loading name...').strip()}")
                 
+                # Delete button
                 if c3.button("🗑️", key=f"del_{ticker}", use_container_width=True):
                     st.session_state.my_watchlist.remove(ticker)
                     if ticker in st.session_state.company_names:
                         del st.session_state.company_names[ticker]
                     st.rerun()
 
+    # --- SIDEBAR TRIGGER BUTTON ---
     st.sidebar.markdown("---")
     st.sidebar.subheader("📋 Workspace")
     if st.sidebar.button("⚙️ Manage My Stock List", use_container_width=True):
         open_watchlist_manager()
     st.sidebar.markdown("---")
 
-    # --- NEW FEATURE: DYNAMIC LOOKUP SEARCH ---
-    st.subheader("🔍 Find & Verify Public Companies")
-    search_query = st.text_input("Type a Company Name or Ticker to find options (e.g., Apple, Intel, Coca-Cola):", "")
-
-    selected_ticker = st.session_state.active_ticker
-
-    if search_query:
-        with st.spinner("Searching global exchanges for matches..."):
-            try:
-                search_prompt = f"""
-                The user typed: '{search_query}'. Find up to 5 matching publicly traded companies currently listed on global stock exchanges.
-                Provide the results in a strict, valid JSON format. Do not write markdown blocks or intro text, just raw JSON.
-                
-                JSON Structure:
-                {{
-                    "matches": [
-                        {{"display_name": "Apple Inc. (AAPL - NASDAQ)", "ticker": "AAPL", "company_name": "Apple Inc."}},
-                        {{"display_name": "Intel Corporation (INTC - NASDAQ)", "ticker": "INTC", "company_name": "Intel Corporation"}}
-                    ]
-                }}
-                Filter out private companies (like Figma). If no valid public listings exist, return an empty list.
-                """
-                search_response = model.generate_content(search_prompt)
-                clean_search_text = search_response.text.strip().replace("```json", "").replace("```", "")
-                search_results = json.loads(clean_search_text).get("matches", [])
-                
-                if search_results:
-                    # Create the drop-down selection mapping
-                    options_map = {item["display_name"]: item for item in search_results}
-                    dropdown_selection = st.selectbox(
-                        "👇 Select the exact company from the matching public listings below:",
-                        options=list(options_map.keys())
-                    )
-                    
-                    if dropdown_selection:
-                        chosen_item = options_map[dropdown_selection]
-                        selected_ticker = chosen_item["ticker"]
-                        # Save the resolved company name to our global map instantly
-                        st.session_state.company_names[selected_ticker] = chosen_item["company_name"]
-                        st.session_state.active_ticker = selected_ticker
-                else:
-                    st.warning("No active publicly traded companies matched your entry. Please try a different name.")
-            except Exception as e:
-                st.error(f"Search directory error: {str(e)}")
-
-    st.markdown("---")
-    
-    # Visual verification banner showing exactly what will be analyzed
-    current_verified_name = st.session_state.company_names.get(selected_ticker, selected_ticker)
-    st.info(f"🎯 **Target Stock Locked In:** {current_verified_name} (`{selected_ticker}`)")
+    # --- MAIN PAGE DISPLAY ---
+    current_verified_name = st.session_state.company_names.get(st.session_state.active_ticker, st.session_state.active_ticker)
+    st.info(f"🎯 **Target Stock Selected:** {current_verified_name} (`{st.session_state.active_ticker}`)")
+    st.write("To change the active stock, click on **Manage My Stock List** in the sidebar, choose a stock, and hit 'Analyze'.")
 
     if st.button("🚀 Run Comprehensive Analysis", type="primary"):
-        ticker = selected_ticker
+        ticker = st.session_state.active_ticker
         comp_name = st.session_state.company_names.get(ticker, ticker)
         st.markdown(f"## 🏢 {comp_name} ({ticker})")
         
